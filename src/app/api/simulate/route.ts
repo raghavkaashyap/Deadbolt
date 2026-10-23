@@ -7,6 +7,8 @@
  * POST → { scenario: ScenarioId, block_on_untrusted_influence?: boolean }
  */
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { parseBody } from "@/lib/deadbolt/http";
 import { createLocalAuthorizer } from "@/lib/deadbolt/agent/localAuthorizer";
 import { makeDemoMandate, runShoppingAgent, SCENARIOS, type ScenarioId } from "@/lib/deadbolt/agent/simulator";
 
@@ -17,20 +19,15 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  const body = (await request.json().catch(() => null)) as {
-    scenario?: string;
-    block_on_untrusted_influence?: boolean;
-  } | null;
-
-  const scenario = body?.scenario;
-  if (!scenario || !Object.hasOwn(SCENARIOS, scenario)) {
-    return NextResponse.json({ error: `scenario must be one of: ${Object.keys(SCENARIOS).join(", ")}` }, { status: 400 });
-  }
-
-  const id = scenario as ScenarioId;
+  const parsed = await parseBody(request, z.object({
+    scenario: z.enum(Object.keys(SCENARIOS) as [ScenarioId, ...ScenarioId[]]),
+    block_on_untrusted_influence: z.boolean().default(false),
+  }));
+  if ("response" in parsed) return parsed.response;
+  const id = parsed.data.scenario;
   const mandate = makeDemoMandate(SCENARIOS[id].mandate);
   const authorize = createLocalAuthorizer(mandate, {
-    decision: { blockOnUntrustedInfluence: body?.block_on_untrusted_influence ?? false },
+    decision: { blockOnUntrustedInfluence: parsed.data.block_on_untrusted_influence },
   });
 
   const run = await runShoppingAgent({ scenario: id, mandate, authorize });
