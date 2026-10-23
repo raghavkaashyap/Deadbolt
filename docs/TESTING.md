@@ -16,7 +16,8 @@ npm run check
 | `npm run typecheck` | TypeScript consistency | None |
 | `npm run build` | Production compilation and static generation | None |
 | `npm run test:browser` | Dashboard behavior, injection/recovery, strict policy, mobile overflow and error recovery | Local production server only |
-| `npm run check` | All the above, in that order | Local only after dependencies/browser install |
+| `npm run check` | Unit/API/database/tooling tests, typecheck, build and Playwright browser tests | Local only after dependencies/browser install |
+| `npm run test:mcp` | Real MCP handshake and browser-tool testing of all scenarios, mobile, console and error recovery | Local production server only |
 | `npm run check:config -- demo` | Confirms demo mode needs no provider credentials | None |
 | `npm run smoke` | Health, seven scenarios and strict price-inflation policy over HTTP | Running Deadbolt server only |
 
@@ -24,7 +25,7 @@ npm run check
 
 For the HTTP smoke test, start `npm run dev` separately, then run `npm run smoke`. Set `DEADBOLT_BASE_URL=http://localhost:3000` to choose a target. Scripts load `.env.local` when present, preserve shell-provided environment values, and reject authenticated requests to non-local HTTP origins.
 
-The GitHub workflow `.github/workflows/ci.yml` runs the credential-free checks on pull requests and pushes to main. It uses no repository secrets. CI does not approve or capture Sandbox payments.
+The GitHub workflow `.github/workflows/ci.yml` runs the credential-free checks on pull requests and pushes to main. It uses no repository secrets and runs `test:mcp` after the regular checks. CI does not approve or capture Sandbox payments.
 
 ## 2. Configuration
 

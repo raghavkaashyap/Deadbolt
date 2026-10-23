@@ -57,6 +57,7 @@ The setup check validates configuration shape only. It never contacts providers 
 
 - [API and execution/retry rules](docs/API.md)
 - [Setup, credentials and test runbook](docs/TESTING.md)
+- [Playwright MCP setup and protocol-driven browser tests](docs/PLAYWRIGHT_MCP.md)
 - [Prioritized follow-up features and acceptance tests](docs/ROADMAP.md)
 - [Decision logic and scenarios](docs/LOGIC.md)
 - [Integration review and sandbox boundaries](docs/INTEGRATION_REVIEW.md)
