@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
       });
       const payment = await updatePayment(paymentId, {
         paypal_order_id: order.id,
-        status: "APPROVAL_PENDING",
+        status: order.status === "COMPLETED" ? "COMPLETED" : "APPROVAL_PENDING",
         approve_url: approveUrl,
         raw: order,
       });
