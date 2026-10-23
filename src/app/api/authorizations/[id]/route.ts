@@ -1,3 +1,4 @@
+import { requireAccess } from "@/lib/deadbolt/access";
 /**
  * GET /api/authorizations/:id → full authorization trace (PRD §19):
  * mandate, proposed transaction, provenance, checks, decision and payments.
@@ -7,6 +8,8 @@ import { jsonError } from "@/lib/deadbolt/http";
 import { getAuthorization, getMandate, listPaymentsForAuthorization } from "@/lib/deadbolt/store";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = requireAccess(_request, false);
+  if (denied) return denied;
   const { id } = await params;
   try {
     const authorization = await getAuthorization(id);

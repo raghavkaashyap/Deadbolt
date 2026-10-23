@@ -1,3 +1,5 @@
+import { TransitionConflict } from "@/lib/deadbolt/store";
+import { requireAccess } from "@/lib/deadbolt/access";
 /**
  * POST /api/mandates/:id/revise
  * { change: "don't let it go over $150", ttl_minutes? }
@@ -10,10 +12,12 @@ import { jsonError, parseBody } from "@/lib/deadbolt/http";
 import { newId } from "@/lib/deadbolt/ids";
 import { compileRevision, toMandateParts } from "@/lib/deadbolt/intentCompiler";
 import { ReviseMandateSchema } from "@/lib/deadbolt/schemas";
-import { deleteMandate, getMandate, insertMandate, supersedeMandate } from "@/lib/deadbolt/store";
+import { getMandate, transition } from "@/lib/deadbolt/store";
 import type { Mandate } from "@/lib/deadbolt/types";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const denied = requireAccess(request, false);
+  if (denied) return denied;
   const { id } = await params;
   const parsed = await parseBody(request, ReviseMandateSchema);
   if ("response" in parsed) return parsed.response;
@@ -30,6 +34,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     try {
       compiled = await compileRevision(current, body.change);
     } catch (error) {
+    if (error instanceof TransitionConflict) return jsonError(409, "Task state changed; refresh before retrying");
       console.error(error);
       return jsonError(502, "Could not compile the revision");
     }
@@ -52,15 +57,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         : current.expires_at,
     };
 
-    const saved = await insertMandate(revised);
-    if (!(await supersedeMandate(current.mandate_id, saved.mandate_id))) {
-      // Another revision won the race; discard ours.
-      await deleteMandate(saved.mandate_id);
-      return jsonError(409, "Mandate was revised concurrently");
-    }
+    const saved = await transition<Mandate>("revise", { mandate_id: current.mandate_id, mandate: revised });
 
     return NextResponse.json({ mandate: saved, previous_mandate_id: current.mandate_id, ambiguities: compiled.ambiguities }, { status: 201 });
   } catch (error) {
+    if (error instanceof TransitionConflict) return jsonError(409, "Task state changed; refresh before retrying");
     return jsonError(500, (error as Error).message);
   }
 }

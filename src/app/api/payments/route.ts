@@ -1,3 +1,5 @@
+import { TransitionConflict } from "@/lib/deadbolt/store";
+import { requireAccess, requireAgentIdentity } from "@/lib/deadbolt/access";
 /**
  * POST /api/payments
  * { agent_id, capability_token, transaction }
@@ -12,38 +14,27 @@ import { jsonError, parseBody } from "@/lib/deadbolt/http";
 import { newId } from "@/lib/deadbolt/ids";
 import { createOrder } from "@/lib/deadbolt/paypal";
 import { PaymentSchema } from "@/lib/deadbolt/schemas";
-import { consumeCapability, insertPayment, updatePayment } from "@/lib/deadbolt/store";
+import { transition, updatePayment, type PaymentRecord } from "@/lib/deadbolt/store";
 
 export async function POST(request: NextRequest) {
+  const denied = requireAccess(request, true);
+  if (denied) return denied;
   const parsed = await parseBody(request, PaymentSchema);
   if ("response" in parsed) return parsed.response;
   const { agent_id, capability_token, transaction } = parsed.data;
-
-  const verified = verifyCapability(capability_token, agent_id, transaction);
-  if (!verified.ok) return jsonError(403, `Payment refused: ${verified.reason}`);
-  const capability = verified.payload;
+  const wrongAgent = requireAgentIdentity(agent_id);
+  if (wrongAgent) return wrongAgent;
 
   try {
-    if (!(await consumeCapability(capability.capability_id))) {
-      return jsonError(403, "Payment refused: capability already used");
-    }
-
-    const paymentId = newId("pay");
-    const now = new Date().toISOString();
-    await insertPayment({
-      payment_id: paymentId,
-      capability_id: capability.capability_id,
-      authorization_id: capability.authorization_id,
-      paypal_order_id: null,
-      status: "CREATED",
-      amount: transaction.amount,
-      currency: transaction.currency.toUpperCase(),
-      approve_url: null,
-      raw: null,
-      created_at: now,
-      updated_at: now,
+    const verified = verifyCapability(capability_token, agent_id, transaction);
+    if (!verified.ok) return jsonError(403, `Payment refused: ${verified.reason}`);
+    const capability = verified.payload;
+    const reserved = await transition<PaymentRecord>("reserve", {
+      authorization_id: capability.authorization_id, capability_id: capability.capability_id,
+      agent_id, payment_id: newId("pay"),
     });
-
+    if (reserved.status !== "CREATED") return NextResponse.json(reserved);
+    const paymentId = reserved.payment_id;
     try {
       const { order, approveUrl } = await createOrder({
         paymentId,
@@ -59,10 +50,14 @@ export async function POST(request: NextRequest) {
       });
       return NextResponse.json(payment, { status: 201 });
     } catch (error) {
-      await updatePayment(paymentId, { status: "FAILED", raw: { error: (error as Error).message } });
+    if (error instanceof TransitionConflict) return jsonError(409, "Task state changed; refresh before retrying");
+      // A timeout may mean PayPal accepted the order. Keep the reservation and
+      // retry with the same paymentId / PayPal-Request-Id; never reopen the task.
+      console.error("Sandbox order creation uncertain", paymentId, error);
       throw error;
     }
   } catch (error) {
+    if (error instanceof TransitionConflict) return jsonError(409, "Task state changed; refresh before retrying");
     console.error(error);
     return jsonError(502, "Payment could not be created");
   }

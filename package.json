@@ -6,10 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "test": "node --test tests/*.cjs",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.0",
+    "@anthropic-ai/sdk": "1.2.0",
     "@supabase/supabase-js": "^2.45.4",
     "next": "^15.5.15",
     "react": "^19.0.0",
@@ -17,6 +18,7 @@
     "zod": "^4.1.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.11",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

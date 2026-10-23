@@ -83,13 +83,19 @@ export function toMandateParts(
 ): { intent: MandateIntent; constraints: MandateConstraints } | { error: string } {
   const maxAmount = maxAmountOverride ?? compiled.max_amount;
   // Fail closed: an agent never gets open-ended spending authority.
-  if (maxAmount == null || !(maxAmount > 0)) {
+  if (maxAmount == null || !Number.isFinite(maxAmount) || !(maxAmount > 0)) {
     return { error: "The instruction has no spending limit. Add one (e.g. 'under $300') or pass max_amount." };
   }
-  if (!(compiled.quantity >= 1)) {
+  if (!Number.isInteger(compiled.quantity) || !(compiled.quantity >= 1)) {
     return { error: "Compiled quantity must be at least 1." };
   }
 
+  if (compiled.ambiguities.length > 0 || !compiled.category.trim() || !/^[A-Za-z]{3}$/.test(compiled.currency)) {
+    return { error: "Mandate is ambiguous or invalid; clarify the instruction before granting authority." };
+  }
+  if (compiled.currency.toUpperCase() !== "USD" || maxAmount > 9999999999.99) {
+    return { error: "The sandbox supports USD purchases only, within its storage limit." };
+  }
   return {
     intent: {
       action: "purchase",

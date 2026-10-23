@@ -11,6 +11,7 @@ const PAYPAL_API_BASE = process.env.PAYPAL_API_BASE ?? "https://api-m.sandbox.pa
 let cachedToken: { value: string; expiresAt: number } | null = null;
 
 async function getAccessToken() {
+  if (PAYPAL_API_BASE !== "https://api-m.sandbox.paypal.com") throw new Error("Only PayPal Sandbox is supported; merchant identity is not verified");
   if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.value;
 
   const clientId = process.env.PAYPAL_CLIENT_ID;

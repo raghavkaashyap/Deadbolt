@@ -1,3 +1,5 @@
+import { TransitionConflict } from "@/lib/deadbolt/store";
+import { requireAccess, requireAgentIdentity } from "@/lib/deadbolt/access";
 /**
  * POST /api/authorize
  * { agent_id, mandate_id, transaction, provenance? }
@@ -13,13 +15,17 @@ import { evaluateAuthorization } from "@/lib/deadbolt/evaluate";
 import { jsonError, parseBody } from "@/lib/deadbolt/http";
 import { newId } from "@/lib/deadbolt/ids";
 import { AuthorizeSchema } from "@/lib/deadbolt/schemas";
-import { getMandate, insertAuthorization, insertCapability, type AuthorizationStatus } from "@/lib/deadbolt/store";
+import { getMandate, transition, type AuthorizationStatus, type AuthorizationRecord } from "@/lib/deadbolt/store";
 import type { AuthorizationResult } from "@/lib/deadbolt/types";
 
 export async function POST(request: NextRequest) {
+  const denied = requireAccess(request, true);
+  if (denied) return denied;
   const parsed = await parseBody(request, AuthorizeSchema);
   if ("response" in parsed) return parsed.response;
   const { agent_id, mandate_id, transaction, provenance } = parsed.data;
+  const wrongAgent = requireAgentIdentity(agent_id);
+  if (wrongAgent) return wrongAgent;
 
   try {
     const mandate = await getMandate(mandate_id);
@@ -51,7 +57,7 @@ export async function POST(request: NextRequest) {
           ? "PENDING_APPROVAL"
           : "BLOCKED";
 
-    await insertAuthorization({
+    const record: AuthorizationRecord = {
       authorization_id: authorizationId,
       mandate_id,
       agent_id,
@@ -62,18 +68,20 @@ export async function POST(request: NextRequest) {
       approval: null,
       created_at: new Date().toISOString(),
       resolved_at: status === "PENDING_APPROVAL" ? null : new Date().toISOString(),
-    });
+    };
 
     let capability: { token: string; capability_id: string; expires_at: string } | null = null;
     if (status === "AUTHORIZED") {
       const issued = issueCapability(authorizationId, mandate, transaction);
-      await insertCapability(issued.payload);
+      await transition("authorize", { mandate_id, authorization: record, capability: issued.payload });
       capability = {
         token: issued.token,
         capability_id: issued.payload.capability_id,
         expires_at: issued.payload.expires_at,
       };
     }
+
+    if (status !== "AUTHORIZED") await transition("authorize", { mandate_id, authorization: record });
 
     return NextResponse.json({
       authorization_id: authorizationId,
@@ -84,6 +92,7 @@ export async function POST(request: NextRequest) {
       capability,
     });
   } catch (error) {
+    if (error instanceof TransitionConflict) return jsonError(409, "Task state changed; refresh before retrying");
     console.error(error);
     return jsonError(500, "Authorization failed; transaction not authorized");
   }

@@ -27,7 +27,7 @@ export interface CapabilityPayload {
 
 function getSecret() {
   const secret = process.env.DEADBOLT_CAPABILITY_SECRET;
-  if (!secret) throw new Error("DEADBOLT_CAPABILITY_SECRET is not set");
+  if (!secret || secret.length < 32) throw new Error("DEADBOLT_CAPABILITY_SECRET is not set");
   return secret;
 }
 
@@ -39,11 +39,16 @@ function sign(encodedPayload: string) {
 export function productHash(tx: ProposedTransaction) {
   const canonical = JSON.stringify([
     tx.merchant.trim().toLowerCase(),
-    tx.product.trim().toLowerCase(),
+    tx.product,
     tx.quantity ?? 1,
     tx.currency.toUpperCase(),
     tx.recurring ?? false,
     tx.recipient ?? null,
+    tx.amount,
+    tx.product_category ?? null,
+    tx.brand ?? null,
+    tx.condition ?? null,
+    Object.entries(tx.attributes ?? {}).sort(([a], [b]) => a.localeCompare(b)),
   ]);
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -62,11 +67,10 @@ export function issueCapability(
     product_hash: productHash(tx),
     max_amount: tx.amount,
     currency: tx.currency.toUpperCase(),
-    expires_at: new Date(Date.now() + CAPABILITY_TTL_MS).toISOString(),
+    expires_at: new Date(Math.min(Date.now() + CAPABILITY_TTL_MS, Date.parse(mandate.expires_at))).toISOString(),
     nonce: randomBytes(16).toString("hex"),
   };
-  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return { token: `${encoded}.${sign(encoded)}`, payload };
+  return { token: encodeCapability(payload), payload };
 }
 
 /** Verify signature, expiry and that the transaction is exactly what was authorized. */
@@ -76,7 +80,7 @@ export function verifyCapability(
   tx: ProposedTransaction
 ): { ok: true; payload: CapabilityPayload } | { ok: false; reason: string } {
   const [encoded, signature] = token.split(".");
-  if (!encoded || !signature) return { ok: false, reason: "Malformed capability token" };
+  if (!encoded || !signature || token.split(".").length !== 2) return { ok: false, reason: "Malformed capability token" };
 
   const expected = Buffer.from(sign(encoded));
   const given = Buffer.from(signature);
@@ -91,7 +95,7 @@ export function verifyCapability(
     return { ok: false, reason: "Malformed capability payload" };
   }
 
-  if (Date.parse(payload.expires_at) <= Date.now()) return { ok: false, reason: "Capability expired" };
+  if (!Number.isFinite(Date.parse(payload.expires_at)) || Date.parse(payload.expires_at) <= Date.now()) return { ok: false, reason: "Capability expired" };
   if (payload.agent_id !== agentId) return { ok: false, reason: "Capability was issued to a different agent" };
   if (payload.merchant !== tx.merchant) return { ok: false, reason: "Merchant differs from the authorized merchant" };
   if (payload.product_hash !== productHash(tx)) {
@@ -101,4 +105,10 @@ export function verifyCapability(
   if (tx.amount > payload.max_amount) return { ok: false, reason: "Amount exceeds the authorized amount" };
 
   return { ok: true, payload };
+}
+
+/** Reconstruct an already-persisted token; never mint fresh authority on retry. */
+export function encodeCapability(payload: CapabilityPayload) {
+  const encoded = Buffer.from(JSON.stringify(Object.fromEntries(Object.entries(payload).sort(([a], [b]) => a.localeCompare(b))))).toString("base64url");
+  return `${encoded}.${sign(encoded)}`;
 }

@@ -32,6 +32,7 @@ export interface PaymentRecord {
   capability_id: string;
   authorization_id: string;
   paypal_order_id: string | null;
+  task_id: string;
   status: "CREATED" | "APPROVAL_PENDING" | "COMPLETED" | "FAILED";
   amount: number;
   currency: string;
@@ -76,29 +77,6 @@ export async function listMandates(limit = 50) {
   );
 }
 
-/** Marks the old version superseded. Fails if it was already superseded (concurrent revision). */
-export async function supersedeMandate(mandateId: string, newMandateId: string) {
-  const rows = unwrap<Mandate[]>(
-    await db()
-      .from("mandates")
-      .update({ superseded_by: newMandateId })
-      .eq("mandate_id", mandateId)
-      .is("superseded_by", null)
-      .select()
-  );
-  return rows.length === 1;
-}
-
-export async function deleteMandate(mandateId: string) {
-  unwrap(await db().from("mandates").delete().eq("mandate_id", mandateId));
-}
-
-// ── Authorizations ─────────────────────────────────────────────────────────
-
-export async function insertAuthorization(record: AuthorizationRecord) {
-  return unwrap<AuthorizationRecord>(await db().from("authorizations").insert(record).select().single());
-}
-
 export async function getAuthorization(authorizationId: string) {
   return unwrap<AuthorizationRecord | null>(
     await db().from("authorizations").select().eq("authorization_id", authorizationId).maybeSingle()
@@ -111,64 +89,18 @@ export async function listAuthorizations(limit = 50) {
   );
 }
 
-/** Resolve a pending authorization. Returns null if it was no longer pending. */
-export async function resolvePendingAuthorization(
-  authorizationId: string,
-  status: "APPROVED" | "DENIED" | "BLOCKED",
-  approval: AuthorizationRecord["approval"]
-) {
-  const rows = unwrap<AuthorizationRecord[]>(
-    await db()
-      .from("authorizations")
-      .update({ status, approval, resolved_at: new Date().toISOString() })
-      .eq("authorization_id", authorizationId)
-      .eq("status", "PENDING_APPROVAL")
-      .select()
-  );
-  return rows[0] ?? null;
-}
-
-// ── Capabilities ───────────────────────────────────────────────────────────
-
-export async function insertCapability(payload: CapabilityPayload) {
-  unwrap(
-    await db().from("capabilities").insert({
-      capability_id: payload.capability_id,
-      authorization_id: payload.authorization_id,
-      payload,
-      expires_at: payload.expires_at,
-    })
-  );
-}
-
-/** Atomically mark a capability used. Returns false if it was already consumed (replay). */
-export async function consumeCapability(capabilityId: string) {
-  const rows = unwrap<unknown[]>(
-    await db()
-      .from("capabilities")
-      .update({ consumed_at: new Date().toISOString() })
-      .eq("capability_id", capabilityId)
-      .is("consumed_at", null)
-      .select()
-  );
-  return rows.length === 1;
-}
-
-// ── Payments ───────────────────────────────────────────────────────────────
-
-export async function insertPayment(record: PaymentRecord) {
-  return unwrap<PaymentRecord>(await db().from("payments").insert(record).select().single());
-}
-
-export async function updatePayment(paymentId: string, fields: Partial<PaymentRecord>) {
-  return unwrap<PaymentRecord>(
-    await db()
-      .from("payments")
-      .update({ ...fields, updated_at: new Date().toISOString() })
+/** Completed is terminal; duplicate creation/capture responses cannot undo it. */
+export async function updatePayment(paymentId: string, fields: Pick<PaymentRecord, "status" | "raw"> & Partial<Pick<PaymentRecord, "paypal_order_id" | "approve_url">>) {
+  const row = unwrap<PaymentRecord | null>(
+    await db().from("payments").update({ ...fields, updated_at: new Date().toISOString() })
       .eq("payment_id", paymentId)
-      .select()
-      .single()
+      .in("status", fields.paypal_order_id ? ["CREATED"] : ["APPROVAL_PENDING"])
+      .select().maybeSingle()
   );
+  if (row) return row;
+  const existing = await getPayment(paymentId);
+  if (!existing) throw new Error("Payment not found");
+  return existing;
 }
 
 export async function getPayment(paymentId: string) {
@@ -180,3 +112,19 @@ export async function listPaymentsForAuthorization(authorizationId: string) {
     await db().from("payments").select().eq("authorization_id", authorizationId).order("created_at")
   );
 }
+
+/** All authority-changing operations share one root-task lock in PostgreSQL. */
+export async function transition<T>(operation: "revise" | "authorize" | "approve" | "reserve" | "capture", data: Record<string, unknown>): Promise<T> {
+  const result = await db().rpc("deadbolt_transition", { operation, data });
+  if (result.error && ["P0001", "23505"].includes(result.error.code)) throw new TransitionConflict(result.error.message);
+  return unwrap<T>(result);
+
+}
+
+/** Used only by the operator to recover the same token after a lost response. */
+export async function getCapabilityForAuthorization(authorizationId: string) {
+  const row = unwrap<{ payload: CapabilityPayload } | null>(await db().from("capabilities").select("payload").eq("authorization_id", authorizationId).maybeSingle());
+  return row?.payload ?? null;
+}
+
+export class TransitionConflict extends Error {}
