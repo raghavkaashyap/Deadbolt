@@ -11,6 +11,7 @@ const {PGlite}=require('@electric-sql/pglite');
 const {NextRequest}=require('next/server');
 let db;
 const calls=[];
+let createFailures=0,createStatus="CREATED";
 const storeFile=require.resolve('../src/lib/deadbolt/store.ts');
 class TransitionConflict extends Error {}
 function mock(file,exports){const id=require.resolve(file);require.cache[id]={id,filename:id,loaded:true,exports};}
@@ -36,7 +37,7 @@ mock('../src/lib/deadbolt/store.ts',{
 });
 mock('../src/lib/deadbolt/semanticCheck.ts',{evaluateIntent:async()=>({intent_match:1,violations:[],reason:'test'})});
 mock('../src/lib/deadbolt/paypal.ts',{
- createOrder:async args=>{calls.push({kind:'create',...args});return {order:{id:'sandbox-'+args.paymentId,status:'CREATED'},approveUrl:'https://sandbox.paypal.com/approve'};},
+ createOrder:async args=>{calls.push({kind:'create',...args});if(createFailures-->0)throw new Error('Simulated uncertain outcome');return {order:{id:'sandbox-'+args.paymentId,status:createStatus},approveUrl:'https://sandbox.paypal.com/approve'};},
  captureOrder:async id=>{calls.push({kind:'capture',id});return {id,status:'COMPLETED'};},
 });
 const authorize=require('../src/app/api/authorize/route.ts');
@@ -93,4 +94,24 @@ test('capture requires credentials, rechecks the task and is idempotent',async()
  const first=await capture.POST(request({}),params(paymentId));assert.equal(first.status,200);assert.equal((await first.json()).status,'COMPLETED');
  assert.equal((await capture.POST(request({}),params(paymentId))).status,200);
  assert.equal(calls.filter(c=>c.kind==='capture').length,1);
+});
+
+test('an uncertain order creation keeps its reservation and handles an already-completed retry',async()=>{
+ const m={...makeDemoMandate('monitor'),mandate_id:'retry-task',agent_id:'shopping_agent'};
+ await db.query('insert into mandates select (jsonb_populate_record(null::mandates,$1)).*',[m]);
+ const result=await authorize.POST(request({...body,mandate_id:'retry-task'}));
+ const id=(await result.json()).authorization_id;
+ const approved=await approval.POST(request({decision:'approve'},operatorKey),params(id));
+ const cap=(await approved.json()).capability.token;
+ const base={agent_id:'shopping_agent',capability_token:cap,transaction:tx};
+ createFailures=1;
+ const logger=console.error;let failed;
+ try {console.error=()=>{};failed=await payment.POST(request(base));} finally {console.error=logger;}
+ assert.equal(failed.status,502);
+ const reservation=await one('select * from payments where authorization_id=$1',[id]);assert.equal(reservation.status,'CREATED');
+ createStatus='COMPLETED';
+ const retry=await payment.POST(request(base));assert.equal(retry.status,201);
+ const completed=await retry.json();assert.equal(completed.payment_id,reservation.payment_id);assert.equal(completed.status,'COMPLETED');
+ const creates=calls.filter(c=>c.kind==='create'&&c.paymentId===reservation.payment_id);assert.equal(creates.length,2);
+ assert.equal(Number((await one('select count(*) as n from payments where authorization_id=$1',[id])).n),1);
 });

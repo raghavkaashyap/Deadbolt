@@ -1,140 +1,64 @@
-# 🚀 Hackathon Starter Template
+# Deadbolt
 
-A minimal, production-ready Next.js + Supabase starter kit.
+Runtime authorization for agent purchases. A mandate preserves the user's intent; deterministic checks, provenance analysis and a semantic check decide whether a proposed checkout should proceed, wait for review or be blocked.
 
-## What's Included
+The current integration is a **single-operator, single-agent USD sandbox**. Agent-reported provenance requires operator review. The configured PayPal Sandbox business receives test payments; arbitrary merchant payees are not independently verified.
 
-- **Next.js 15** — App Router, TypeScript, Tailwind CSS
-- **Supabase** — Postgres database + Auth, pre-configured browser & server clients
-- **API Routes** — Health check (`/api/health`) and full CRUD example (`/api/items`)
-- **Typed API Client** — `src/lib/apiClient.ts` with `get`, `post`, `put`, `del` helpers
-- **Reusable Components** — `Card` component to get you started
-- **Vercel Ready** — Zero-config deployment
+## Try the demo — no credentials
 
----
-
-## Prerequisites
-
-- Node.js 18+
-- npm
-- [Supabase account](https://supabase.com)
-
----
-
-## Setup
+Use Node.js 22+ and npm:
 
 ```bash
-# 1. Clone or download
-git clone https://github.com/your-org/hackathon-template.git
-cd hackathon-template
-
-# 2. Install dependencies
-npm install
-
-# 3. Configure environment variables
-cp .env.example .env.local
-# Then open .env.local and fill in your Supabase keys (see below)
-
-# 4. Start the dev server
+npm ci
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to see your app.
+Open http://localhost:3000. Choose a scenario and run it. Inspect blocked attempts, agent recovery, policy checks and the synthetic execution trace. The demo never accesses Supabase, Anthropic or PayPal.
 
----
+In a second terminal:
 
-## Connecting Supabase
-
-1. Go to [app.supabase.com](https://app.supabase.com) → your project → **Project Settings → API**
-2. Copy **Project URL** → `NEXT_PUBLIC_SUPABASE_URL`
-3. Copy **anon public** key → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-4. *(Optional)* Copy **service_role** key → `SUPABASE_SERVICE_ROLE_KEY` (for server-side admin ops)
-
-### Create the `items` table (for the example API)
-
-Run this in the Supabase **SQL Editor**:
-
-```sql
-create table items (
-  id         bigint generated always as identity primary key,
-  name       text not null,
-  created_at timestamptz default now()
-);
-alter table items enable row level security;
-create policy "Allow all" on items for all using (true);
+```bash
+npm run check:config -- demo
+npm run smoke
 ```
 
----
+`smoke` checks health, all seven scenarios and the stricter untrusted-influence policy over HTTP.
 
-## Project Structure
+## Verify a change
 
-```
-├── .env.example              # Environment variable template
-├── next.config.ts            # Next.js configuration
-├── tailwind.config.ts        # Tailwind CSS configuration
-├── postcss.config.mjs        # PostCSS configuration
-├── src/
-│   ├── app/
-│   │   ├── api/
-│   │   │   ├── health/route.ts   # GET /api/health
-│   │   │   └── items/route.ts    # GET + POST /api/items (Supabase CRUD)
-│   │   ├── globals.css           # Global styles + Tailwind directives
-│   │   ├── layout.tsx            # Root layout with header/footer
-│   │   └── page.tsx              # Homepage
-│   ├── components/
-│   │   └── Card.tsx              # Reusable card component
-│   └── lib/
-│       ├── supabase.ts           # Supabase browser + admin clients
-│       └── apiClient.ts          # Typed fetch helpers (get/post/put/del)
+```bash
+npm ci
+npx playwright install --with-deps chromium
+npm run check
 ```
 
----
+`check` runs unit/API/database tests, TypeScript, the production build and browser tests. Browser tests launch a production server on port 3100; no secrets are required. See [Testing](docs/TESTING.md) for individual commands, failure checks and staging concurrency tests.
 
-## API Endpoints
+## Connect the authenticated API and PayPal Sandbox
 
-| Method | Endpoint       | Description                        |
-|--------|----------------|------------------------------------|
-| GET    | `/api/health`  | Health check — returns `{ status: "ok", timestamp }` |
-| GET    | `/api/items`   | List all items from Supabase       |
-| POST   | `/api/items`   | Create a new item `{ name: string }` |
+1. Copy `.env.example` to `.env.local`; use the configuration table in [Testing](docs/TESTING.md).
+2. Apply `supabase/schema.sql`, then `supabase/transactions.sql` to a disposable Supabase project.
+3. Configure distinct operator, agent and capability secrets, the agent identity, Supabase server credentials and Anthropic credentials. Add PayPal **Sandbox app** client ID and secret for payment testing.
+4. Run `npm run check:config`, restart the app, and follow [the staged Sandbox test](docs/TESTING.md#paypal-sandbox-smoke-test).
 
-### Example usage with the API client
+The setup check validates configuration shape only. It never contacts providers or prints secret values.
 
-```ts
-import { get, post } from "@/lib/apiClient";
+## What is implemented
 
-const items = await get<Item[]>("/api/items");
-const newItem = await post<Item>("/api/items", { name: "My item" });
-```
+- Immutable, versioned purchase mandates with deterministic policy enforcement.
+- Semantic intent verification and provenance/risk evaluation.
+- Separate operator/agent API credentials and scoped, short-lived capabilities.
+- Atomic authority transitions and one purchase reservation per mandate lineage.
+- Sandbox order creation/capture with stable request IDs and caller-controlled retries.
+- Offline scenario dashboard and synthetic provenance explorer.
+- Unit, PostgreSQL, API, browser and CLI smoke tests, plus CI.
 
----
+## Documentation
 
-## Deploying to Vercel
-
-1. Push your repo to GitHub
-2. Go to [vercel.com](https://vercel.com) → **New Project** → import your repo
-3. Add your environment variables (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) in the Vercel project settings
-4. Click **Deploy** — done!
-
-Your app will be live at `https://your-project.vercel.app`.
-
----
-
-## Adding Supabase Auth
-
-Supabase Auth is already available through the configured client. To add authentication:
-
-1. Enable your desired auth providers in Supabase Dashboard → **Authentication → Providers**
-2. Use `supabase.auth.signInWithOAuth(...)`, `supabase.auth.signInWithPassword(...)`, etc.
-3. See the [Supabase Auth docs](https://supabase.com/docs/guides/auth) for full details
-
----
-
-## Key Scripts
-
-| Command         | Description                        |
-|-----------------|------------------------------------|
-| `npm run dev`   | Start development server on :3000  |
-| `npm run build` | Build for production               |
-| `npm run start` | Start production server            |
-| `npm run lint`  | Run ESLint                         |
+- [API and execution/retry rules](docs/API.md)
+- [Setup, credentials and test runbook](docs/TESTING.md)
+- [Playwright MCP setup and protocol-driven browser tests](docs/PLAYWRIGHT_MCP.md)
+- [Prioritized follow-up features and acceptance tests](docs/ROADMAP.md)
+- [Decision logic and scenarios](docs/LOGIC.md)
+- [Integration review and sandbox boundaries](docs/INTEGRATION_REVIEW.md)
+- [Original product requirements](docs/PRD.md)
